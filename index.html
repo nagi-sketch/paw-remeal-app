@@ -173,7 +173,9 @@ function boot(){
     if (!r.registered) return renderRegister();
     S.home = r.home;
     if (r.needConsent) return renderConsentAgain();
-    go('today');
+    // リッチメニューの「記録を見る」は ?view=record で開く（LIFFは liff.state 経由で渡す）
+    var q=location.search+decodeURIComponent((location.search.match(/liff\.state=([^&]*)/)||[])[1]||'');
+    go(/[?&]view=record/.test(q) ? 'record' : 'today');
   });
 }
 
