@@ -149,7 +149,11 @@ var TEST = /^http:\/\/localhost/.test(PAW.api) && /[?&]t=/.test(location.search)
 function api(a, body){
   var payload = Object.assign({ a:a, t:S.token }, body||{});
   return fetch(PAW.api, { method:'POST', body: JSON.stringify(payload) }).then(function(r){ return r.json(); }).then(function(res){
-    if (res && res.relogin && window.liff && !TEST) { try { liff.login({ redirectUri: location.href }); } catch(e){} }
+    if (res && res.relogin && window.liff && !TEST) {
+      var tried = false; try { tried = sessionStorage.getItem('remeal_relogin') === '1'; } catch(e){}
+      if (!tried) { try { sessionStorage.setItem('remeal_relogin','1'); } catch(e){} try { liff.login({ redirectUri: location.href }); } catch(e){} }
+      else { res.error = (res.error || '本人確認ができませんでした') + '（設定の確認：Apps Scriptの LOGIN_CHANNEL_ID が LIFF のチャネルID、LIFF の Scope に openid）' + (res.why ? '［' + res.why + '］' : ''); res.relogin = false; }
+    } else if (res && res.ok) { try { sessionStorage.removeItem('remeal_relogin'); } catch(e){} }
     return res;
   }).catch(function(){ return { ok:false, error:'つながりませんでした。電波の良いところでもう一度お試しください' }; });
 }
