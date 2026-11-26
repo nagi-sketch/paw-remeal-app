@@ -104,6 +104,17 @@ details summary{font-size:.8rem;color:var(--sub);cursor:pointer}
 .viewer{position:fixed;inset:0;z-index:40;background:rgba(250,250,247,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;gap:12px}
 .viewer img{max-width:100%;max-height:78vh;border-radius:10px}
 .center{text-align:center}
+.days{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+.days button{flex:none;font:inherit;width:64px;height:58px;border-radius:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.3}
+.days button small{font-size:.72rem;color:var(--sub)}
+.days button[aria-pressed="true"]{background:var(--pri);border-color:var(--pri);color:#fff}
+.days button[aria-pressed="true"] small{color:#fff}
+.when{font-size:1.35rem;font-weight:500;letter-spacing:.02em}
+.kv{display:grid;grid-template-columns:5.5em 1fr;gap:4px 8px;font-size:.88rem;margin-top:8px}
+.kv dt{color:var(--sub)} .kv dd{margin:0}
+.clist{display:flex;flex-direction:column;gap:8px}
+.clist div{border-top:1px solid var(--line);padding-top:8px;font-size:.88rem}
+.clist div:first-child{border-top:0;padding-top:0}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
 </style>
 </head>
@@ -171,6 +182,10 @@ function boot(){
   api('me').then(function(r){
     if (!r.ok) { $('main').innerHTML='<div class="err">'+esc(r.error)+'</div>'; return; }
     S.me = r;
+    if (r.registered) S.home = r.home;
+    // リッチメニューの「無料相談」は ?view=book で開く。登録していない方も予約できる（2026-11-26）
+    var q0=location.search+decodeURIComponent((location.search.match(/liff\.state=([^&]*)/)||[])[1]||'');
+    if (/[?&]view=book/.test(q0)) return go('book');
     var wantStaff = location.hash==='#staff' || /[?&]staff=1/.test(location.search);
     if (wantStaff && !r.staff) return renderNotStaff(r.userId);
     if (wantStaff || (!r.registered && r.staff)) return go('staff');
@@ -191,7 +206,7 @@ function frame(){
   $('tabs').hidden = items.length < 2;
   $('tabs').innerHTML = items.map(function(i){ return '<button type="button" data-go="'+i[0]+'"'+(S.screen===i[0]?' aria-current="page"':'')+'>'+i[1]+'</button>'; }).join('');
 }
-function go(s){ S.screen=s; frame(); window.scrollTo(0,0); ({ today:renderToday, record:renderRecord, staff:renderStaff })[s](); }
+function go(s){ S.screen=s; frame(); window.scrollTo(0,0); ({ today:renderToday, record:renderRecord, staff:renderStaff, book:renderBook })[s](); }
 function cta(label, fn, disabled){
   if (!label) { $('cta').hidden=true; return; }
   $('cta').hidden=false; var b=$('ctaBtn'); b.textContent=label; b.disabled=!!disabled; b.onclick=fn;
@@ -248,6 +263,83 @@ function renderConsentAgain(){
 function renderNotStaff(uid){
   S.screen='notstaff'; frame(); cta('');
   $('main').innerHTML='<div class="card"><h2>コーチ画面</h2><p>'+w('まだ|スタッフとして|登録されていません。|下の|IDを|本部に|送ってください。')+'</p><p style="margin-top:10px;font-weight:500;user-select:all;word-break:break-all;font-size:.9rem">'+esc(uid||'')+'</p></div>';
+}
+
+/* ---------- 無料カウンセリングの予約（2026-11-26） ---------- */
+var BK = { slots:[], day:'', time:'', paw:'' };
+function talk(text){
+  // 予約の内容をトークにも残す（コーチがチャットで見られる）。LINEの外では送らない
+  if (TEST) { toast('トークに送りました（試験）'); return; }
+  if (!window.liff || !liff.isInClient || !liff.isInClient()) return;
+  liff.sendMessages([{ type:'text', text:text }]).catch(function(){});
+}
+function renderBook(){
+  var main=$('main'); main.innerHTML='<div class="card center small">読み込んでいます…</div>'; cta('');
+  api('slots').then(function(r){
+    if(!r.ok) return main.innerHTML='<div class="err">'+esc(r.error)+'</div>';
+    BK.slots=r.slots; BK.len=r.len; BK.meet=r.meet;
+    if (r.mine) return renderBooked(r.mine);
+    var days=[]; r.slots.forEach(function(x){ if(days.indexOf(x.date)<0) days.push(x.date); });
+    if (days.indexOf(BK.day)<0) { BK.day=days[0]||''; BK.time=''; }
+    var html='<div class="card"><div class="date" style="font-size:1.3rem">'+w('無料|カウンセリング')+'</div>'+
+      '<p class="small" style="margin-top:4px">'+w('オンライン・|'+esc(r.len)+'・|無料')+'</p>'+
+      '<p style="margin-top:8px;font-size:.9rem">'+w('今の|食事の|ことを|聞かせてください。|顔は|映さなくて|大丈夫です。|その場での|お申込みは|不要です。')+'</p></div>';
+    if (!days.length) {
+      main.innerHTML=html+'<div class="card"><p>'+w('いま|予約できる|日時が|ありません。|このトークで、|ご希望の|日時を|お知らせください。')+'</p></div>';
+      cta(S.home?'今日の記録へ':'',function(){ go('today'); }); return;
+    }
+    html+='<div class="card"><h2>日にち</h2><div class="days" id="bk-days">'+days.map(function(d){ var p=ymdParts(d); return '<button type="button" data-day="'+d+'" aria-pressed="'+(d===BK.day)+'">'+p.m+'/'+p.d+'<small>'+WD.charAt(p.wd)+'</small></button>'; }).join('')+'</div>'+
+      '<h2 style="margin-top:14px">時間</h2><div class="seg c3" id="bk-times"></div></div>'+
+      '<div class="card" style="display:flex;flex-direction:column;gap:14px">'+
+      '<label class="f">お名前（ニックネームでも大丈夫です）<input type="text" id="bk-name" maxlength="20" autocomplete="nickname" value="'+esc(S.home?S.home.nick:'')+'"></label>'+
+      '<div class="f">Pawの会員ですか<div class="seg c2" id="bk-paw"><button type="button" data-v="yes" aria-pressed="'+(BK.paw==='yes')+'">はい</button><button type="button" data-v="no" aria-pressed="'+(BK.paw==='no')+'">いいえ</button></div></div>'+
+      '<label class="f">相談したいこと（任意）<input type="text" id="bk-note" maxlength="200" placeholder="例：産後の食事、外食が多い"></label></div>'+
+      '<div id="bk-err"></div>';
+    main.innerHTML=html;
+    function times(){
+      $('bk-times').innerHTML=BK.slots.filter(function(x){ return x.date===BK.day; }).map(function(x){ return '<button type="button" data-time="'+x.time+'" aria-pressed="'+(x.time===BK.time)+'">'+x.time.replace(/^0/,'')+'</button>'; }).join('');
+      setBookCta();
+    }
+    $('bk-days').onclick=function(e){ var b=e.target.closest('[data-day]'); if(!b) return; BK.day=b.dataset.day; BK.time=''; this.querySelectorAll('button').forEach(function(x){ x.setAttribute('aria-pressed',x===b); }); times(); };
+    $('bk-times').onclick=function(e){ var b=e.target.closest('[data-time]'); if(!b) return; BK.time=b.dataset.time; this.querySelectorAll('button').forEach(function(x){ x.setAttribute('aria-pressed',x===b); }); setBookCta(); };
+    $('bk-paw').onclick=function(e){ var b=e.target.closest('[data-v]'); if(!b) return; BK.paw=b.dataset.v; this.querySelectorAll('button').forEach(function(x){ x.setAttribute('aria-pressed',x===b); }); };
+    times();
+  });
+}
+function setBookCta(){
+  if (!BK.time) return cta('日にちと時間を選んでください', function(){}, true);
+  cta(mdw(BK.day)+' '+BK.time.replace(/^0/,'')+' で予約する', function(){
+    var b=$('ctaBtn'); b.disabled=true;
+    api('book',{ date:BK.day, time:BK.time, name:$('bk-name').value, paw:BK.paw, note:$('bk-note').value }).then(function(r){
+      b.disabled=false;
+      if(!r.ok){ $('bk-err').innerHTML='<div class="err">'+esc(r.error)+'</div>'; if(r.full){ BK.time=''; toast('別の日時を選んでください'); renderBook(); } return; }
+      BK.meet=r.meet;
+      talk('無料カウンセリングを\n予約しました。\n'+mdw(r.mine.date)+' '+r.mine.time.replace(/^0/,'')+'〜\nお名前：'+r.mine.name);
+      renderBooked(r.mine, true);
+    });
+  });
+}
+function renderBooked(m, fresh){
+  S.screen='book'; frame();
+  $('main').innerHTML='<div class="card"><h2>'+(fresh?'予約しました':'ご予約')+'</h2>'+
+    '<div class="when">'+mdw(m.date)+' '+m.time.replace(/^0/,'')+'〜</div>'+
+    '<dl class="kv"><dt>内容</dt><dd>無料カウンセリング<br><span class="small">オンライン・'+esc(BK.len||'30〜60分')+'</span></dd><dt>お名前</dt><dd>'+esc(m.name)+'</dd>'+(m.coach?'<dt>担当</dt><dd>'+esc(m.coach)+'</dd>':'')+'</dl>'+
+    (BK.meet
+      ? '<p style="margin-top:12px;font-size:.9rem">'+w('時間に|なったら、|下の|ボタンから|ビデオ通話に|お入りください。')+'</p><a class="btn fill" style="display:flex;align-items:center;justify-content:center;margin-top:8px;text-decoration:none" href="'+esc(BK.meet)+'" target="_blank" rel="noopener">ビデオ通話を開く</a>'
+      : '<p class="note">'+w('前日までに、|ビデオ通話の|URLを|コーチから|このトークで|お送りします。')+'</p>')+
+    (fresh?'<p class="small" style="margin-top:10px">'+w('予約の|内容を|トークにも|送りました。')+'</p>':'')+'</div>'+
+    '<div class="card"><p class="small">'+w('日時を|変えたいときは、|取り消してから|選び直してください。')+'</p><button type="button" class="btn" id="bk-cancel" style="margin-top:8px;width:100%">予約を取り消す</button></div>';
+  $('bk-cancel').onclick=function(){
+    if (!window.confirm(mdw(m.date)+' '+m.time.replace(/^0/,'')+' の予約を取り消しますか')) return;
+    var b=this; b.disabled=true;
+    api('cancelBook').then(function(r){
+      b.disabled=false; if(!r.ok) return toast(r.error);
+      talk('無料カウンセリングの\n予約を取り消しました。\n'+mdw(m.date)+' '+m.time.replace(/^0/,''));
+      toast('取り消しました'); BK.time=''; renderBook();
+    });
+  };
+  if (S.home) cta('今日の記録へ', function(){ go('today'); });
+  else cta('トークに戻る', function(){ try { liff.closeWindow(); } catch(e){ toast('左上の×で閉じてください'); } });
 }
 
 /* ---------- 今日 ---------- */
@@ -408,6 +500,9 @@ function renderStaff(){
       '<div class="row" style="margin-top:12px;align-items:baseline;gap:6px"><span class="small">返信</span><span class="big">'+r.done+'</span><span class="small">／ '+total+'人</span></div>'+
       '<p class="small">'+w('期限は|'+mdw(r.deadline)+'|'+hm(r.deadline)+'。|返信は|LINE公式アカウントの|チャットから|送り、|送ったら|「返信した」を|押してください。')+'</p>'+
       (r.late&&r.done<total?'<div class="note alert">'+w('期限を|過ぎています。|未返信の|方から|先に|返してください。')+'</div>':'')+'</div>';
+    if (r.counsel && r.counsel.length) html+='<div class="card"><h2>無料カウンセリングの予定（7日）</h2><div class="clist">'+r.counsel.map(function(c){
+      return '<div><b>'+mdw(c.date)+' '+c.time.replace(/^0/,'')+'</b>　'+esc(c.name)+'さん<span class="small">（'+(c.paw==='はい'?'Paw会員':'会員でない方')+(c.coach?'・担当 '+esc(c.coach):'')+'）</span>'+(c.note?'<div class="small" style="border:0;padding:2px 0 0">'+esc(c.note)+'</div>':'')+'</div>';
+    }).join('')+'</div><p class="small" style="margin-top:8px">'+w('ビデオ通話の|URLは|前日までに|チャットから。|終わったら|表の|状態を|直してください。')+'</p></div>';
     if (r.hardToday.length) html+='<div class="card person hard"><h2 style="margin:0;color:var(--alert)">今日「つらい」を選んだ方</h2><p>'+r.hardToday.map(function(h){ return '<b>'+esc(h.nick)+'</b>さん <span class="small">'+hm(h.at)+'</span>'; }).join('　')+'</p><p class="small">'+w('今日の|分を|開いて、|早めに|声を|かけてください。')+'</p></div>';
     html+= r.people.length ? r.people.map(personHtml).join('') : '<div class="card small center">この日の記録はありません</div>';
     if (r.quiet.length) html+='<div class="card"><h2>記録がなかった方</h2><p class="small">'+r.quiet.map(esc).join('、')+'</p></div>';
